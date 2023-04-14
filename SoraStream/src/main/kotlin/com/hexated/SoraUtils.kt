@@ -7,6 +7,7 @@ import com.hexated.SoraStream.Companion.baymoviesAPI
 import com.hexated.SoraStream.Companion.consumetCrunchyrollAPI
 import com.hexated.SoraStream.Companion.filmxyAPI
 import com.hexated.SoraStream.Companion.gdbot
+import com.hexated.SoraStream.Companion.putlockerAPI
 import com.hexated.SoraStream.Companion.smashyStreamAPI
 import com.hexated.SoraStream.Companion.tvMoviesAPI
 import com.hexated.SoraStream.Companion.twoEmbedAPI
@@ -14,13 +15,11 @@ import com.hexated.SoraStream.Companion.watchOnlineAPI
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.APIHolder.getCaptchaToken
 import com.lagradost.cloudstream3.mvvm.suspendSafeApiCall
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.Coroutines.ioSafe
 import com.lagradost.nicehttp.NiceResponse
 import com.lagradost.nicehttp.RequestBodyTypes
-import com.lagradost.nicehttp.requestCreator
 import kotlinx.coroutines.delay
 import okhttp3.FormBody
 import okhttp3.Headers
@@ -42,6 +41,7 @@ import kotlin.collections.ArrayList
 import kotlin.math.min
 
 val soraAPI = base64DecodeAPI("cA==YXA=cy8=Y20=di8=LnQ=b2s=a2w=bG8=aS4=YXA=ZS0=aWw=b2I=LW0=Z2E=Ly8=czo=dHA=aHQ=")
+val soraBackupAPI = base64DecodeAPI("dg==LnQ=bGw=aGk=dGM=dXM=Lmo=b2s=a2w=bG8=Ly8=czo=dHA=aHQ=")
 
 val soraHeaders = mapOf(
     "lang" to "en",
@@ -84,6 +84,11 @@ val untrimmedIndex = arrayOf(
 
 val needRefererIndex = arrayOf(
     "ShinobiMovies",
+)
+
+val ddomainIndex = arrayOf(
+    "RinzryMovies",
+    "ShinobiMovies"
 )
 
 val mimeType = arrayOf(
@@ -507,42 +512,6 @@ suspend fun fetchSoraEpisodes(id: String, type: String, episode: Int?) : Episode
     }
 }
 
-suspend fun invokeSapphire(
-    url: String? = null,
-    isDub: Boolean = false,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit,
-) {
-    var data = app.get("${url?.replace("player.php", "config.php")}&action=config", referer = url).text
-    while (true) {
-        if (data.startsWith("{")) break
-        if (data == "null") {
-            data = app.get("$url&action=config", referer = url).text
-            delay(1000)
-        }
-        data = data.decodeBase64()
-    }
-
-    tryParseJson<SapphireSources>(data).let { res ->
-        res?.streams?.filter { it.format == "adaptive_hls" && it.hardsub_lang.isNullOrEmpty() }?.reversed()?.map { source ->
-            val name = if (isDub) "English Dub" else "Raw"
-            M3u8Helper.generateM3u8(
-                "Crunchyroll [$name]",
-                source.url ?: return@map null,
-                "https://static.crunchyroll.com/",
-            ).forEach(callback)
-        }
-        res?.subtitles?.map { sub ->
-            subtitleCallback.invoke(
-                SubtitleFile(
-                    fixCrunchyrollLang(sub.language ?: return@map null) ?: sub.language,
-                    sub.url ?: return@map null
-                )
-            )
-        }
-    }
-}
-
 suspend fun bypassOuo(url: String?): String? {
     var res = session.get(url ?: return null)
     run lit@{
@@ -643,6 +612,66 @@ suspend fun bypassHrefli(url: String): String? {
         .substringBefore("\")")
     if (path == "/404") return null
     return fixUrl(path, getBaseUrl(driveUrl))
+}
+
+suspend fun bypassTechmny(url: String) : String? {
+    val postUrl = url.substringBefore("?id=").substringAfter("/?")
+    var res = app.post(
+        postUrl, data = mapOf(
+            "_wp_http_c" to url.substringAfter("?id=")
+        )
+    )
+    val (longC, catC, _) = getTechmnyCookies(res.text)
+    var headers = mapOf("Cookie" to "$longC; $catC")
+    var formLink = res.document.selectFirst("center a")?.attr("href")
+
+    res = app.get(formLink ?: return null, headers = headers)
+    val (longC2, _, postC) = getTechmnyCookies(res.text)
+    headers = mapOf("Cookie" to "$catC; $longC2; $postC")
+    formLink = res.document.selectFirst("center a")?.attr("href")
+
+    res = app.get(formLink ?: return null, headers = headers)
+    val goToken = res.text.substringAfter("?go=").substringBefore("\"")
+    val tokenUrl = "$postUrl?go=$goToken"
+    val newLongC = "$goToken=" + longC2.substringAfter("=")
+    headers = mapOf("Cookie" to "$catC; rdst_post=; $newLongC")
+
+    val driveUrl = app.get(tokenUrl, headers = headers).document.selectFirst("meta[http-equiv=refresh]")?.attr("content")?.substringAfter("url=")
+    val path = app.get(driveUrl ?: return null).text.substringAfter("replace(\"")
+        .substringBefore("\")")
+    if (path == "/404") return null
+    return fixUrl(path, getBaseUrl(driveUrl))
+}
+
+suspend fun bypassDriveleech(url: String) : String? {
+    val path = app.get(url).text.substringAfter("replace(\"")
+        .substringBefore("\")")
+    if (path == "/404") return null
+    return fixUrl(path, getBaseUrl(url))
+}
+
+private fun getTechmnyCookies(page: String): Triple<String, String, String> {
+    val cat = "rdst_cat"
+    val post = "rdst_post"
+    val longC = page.substringAfter(".setTime")
+        .substringAfter("document.cookie = \"")
+        .substringBefore("\"")
+        .substringBefore(";")
+    val catC = if (page.contains("$cat=")) {
+        page.substringAfterLast("$cat=")
+            .substringBefore(";").let {
+                "$cat=$it"
+            }
+    } else { "" }
+
+    val postC = if (page.contains("$post=")) {
+        page.substringAfterLast("$post=")
+            .substringBefore(";").let {
+                "$post=$it"
+            }
+    } else { "" }
+
+    return Triple(longC, catC, postC)
 }
 
 suspend fun getTvMoviesServer(url: String, season: Int?, episode: Int?): Pair<String, String?>? {
@@ -795,6 +824,61 @@ fun Map<String, List<CrunchyrollEpisodes>>?.matchingEpisode(
         } ?: eps.value.find { it.episode_number == episode }
     }?.firstOrNull()
 }
+
+suspend fun extractPutlockerSources(url: String?): NiceResponse? {
+    val embedHost = url?.substringBefore("/embed-player")
+    val player = app.get(
+        url ?: return null,
+        referer = "${putlockerAPI}/"
+    ).document.select("div#player")
+
+    val text = "\"${player.attr("data-id")}\""
+    val password = player.attr("data-hash")
+    val cipher = CryptoAES.plEncrypt(password, text)
+
+    return app.get(
+        "$embedHost/ajax/getSources/", params = mapOf(
+            "id" to cipher.cipherText,
+            "h" to cipher.password,
+            "a" to cipher.iv,
+            "t" to cipher.salt,
+        ), referer = url
+    )
+}
+
+suspend fun PutlockerResponses?.callback(
+    referer: String,
+    server: String,
+    callback: (ExtractorLink) -> Unit
+) {
+    val ref = getBaseUrl(referer)
+    this?.sources?.map { source ->
+        val request = app.get(source.file, referer = ref)
+        callback.invoke(
+            ExtractorLink(
+                "Putlocker [$server]",
+                "Putlocker [$server]",
+                if (!request.isSuccessful) return@map null else source.file,
+                ref,
+                if (source.file.contains("m3u8")) getPutlockerQuality(request.text) else source.label?.replace(
+                    Regex("[Pp]"),
+                    ""
+                )?.trim()?.toIntOrNull()
+                    ?: Qualities.P720.value,
+                source.file.contains("m3u8")
+            )
+        )
+    }
+}
+
+fun getPutlockerQuality(quality: String): Int {
+    return when {
+        quality.contains("NAME=\"1080p\"") || quality.contains("RESOLUTION=1920x1080") -> Qualities.P1080.value
+        quality.contains("NAME=\"720p\"") || quality.contains("RESOLUTION=1280x720")-> Qualities.P720.value
+        else -> Qualities.P480.value
+    }
+}
+
 
 fun getEpisodeSlug(
     season: Int? = null,
@@ -1097,30 +1181,6 @@ fun fixUrl(url: String, domain: String): String {
     }
 }
 
-suspend fun loadLinksWithWebView(
-    url: String,
-    callback: (ExtractorLink) -> Unit
-) {
-    val foundVideo = WebViewResolver(
-        Regex("""\.m3u8|i7njdjvszykaieynzsogaysdgb0hm8u1mzubmush4maopa4wde\.com""")
-    ).resolveUsingWebView(
-        requestCreator(
-            "GET", url, referer = "https://olgply.com/"
-        )
-    ).first ?: return
-
-    callback.invoke(
-        ExtractorLink(
-            "Olgply",
-            "Olgply",
-            foundVideo.url.toString(),
-            "",
-            Qualities.P1080.value,
-            true
-        )
-    )
-}
-
 fun Int.toRomanNumeral(): String = Symbol.closestBelow(this)
     .let { symbol ->
         if (symbol != null) {
@@ -1187,6 +1247,25 @@ object CryptoAES {
         System.arraycopy(cipherText, 0, b, sBytes.size + saltBytes.size, cipherText.size)
         val bEncode = Base64.encode(b, Base64.NO_WRAP)
         return String(bEncode)
+    }
+
+    fun plEncrypt(password: String, plainText: String): EncryptResult {
+        val saltBytes = generateSalt(8)
+        val key = ByteArray(KEY_SIZE / 8)
+        val iv = ByteArray(IV_SIZE / 8)
+        EvpKDF(password.toByteArray(), KEY_SIZE, IV_SIZE, saltBytes, key, iv)
+        val keyS = SecretKeySpec(key, AES)
+        val cipher = Cipher.getInstance(HASH_CIPHER)
+        val ivSpec = IvParameterSpec(iv)
+        cipher.init(Cipher.ENCRYPT_MODE, keyS, ivSpec)
+        val cipherText = cipher.doFinal(plainText.toByteArray())
+        val bEncode = Base64.encode(cipherText, Base64.NO_WRAP)
+        return EncryptResult(
+            String(bEncode).toHex(),
+            password.toHex(),
+            saltBytes.toHex(),
+            iv.toHex()
+        )
     }
 
     /**
@@ -1266,6 +1345,18 @@ object CryptoAES {
             SecureRandom().nextBytes(this)
         }
     }
+
+    private fun ByteArray.toHex(): String = joinToString(separator = "") { eachByte -> "%02x".format(eachByte) }
+
+    private fun String.toHex(): String = toByteArray().toHex()
+
+    data class EncryptResult(
+        val cipherText: String,
+        val password: String,
+        val salt: String,
+        val iv: String
+    )
+
 }
 
 object RabbitStream {

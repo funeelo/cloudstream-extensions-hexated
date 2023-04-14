@@ -1,12 +1,12 @@
 // use an integer for version numbers
-version = 10
+version = 7
 
 
 cloudstream {
-    language = "id"
+    language = "en"
     // All of these properties are optional, you can safely remove them
 
-    // description = "Lorem Ipsum"
+     description = "- StremioX allows you to use stream addons \n- StremioC allows you to use catalog addons \n<!> Requires Setup"
      authors = listOf("Hexated")
 
     /**
@@ -18,10 +18,9 @@ cloudstream {
      * */
     status = 1 // will be 3 if unspecified
     tvTypes = listOf(
-        "AnimeMovie",
-        "Anime",
-        "OVA",
+        "TvSeries",
+        "Movie",
     )
 
-    iconUrl = "https://www.google.com/s2/favicons?domain=kuramanime.com&sz=%size%"
+    iconUrl = "https://raw.githubusercontent.com/hexated/cloudstream-extensions-hexated/master/StremioX/icon.png"
 }
